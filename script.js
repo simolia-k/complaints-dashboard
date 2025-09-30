@@ -1,168 +1,151 @@
+/***** ───────── 설정 ───────── */
+const CSV_PATH = './data/민원_preprocessed.csv'; // 파일명 바꾸셨다면 여기만 수정
+/***** ─────────────────────── */
 
-let allData = []; // Variable to store the raw data
-let categoryChartInstance = null; // Variable to hold the Chart.js instance
+const $ = (sel) => document.querySelector(sel);
+const els = {
+  age: document.querySelector('#ageSelect, #age-filter'),
+  gender: document.querySelector('#genderSelect, #gender-filter'),
+  kpiTitle: $('#kpiTitle'),
+  kpiValue: $('#kpiValue'),
+  chart: $('#categoryChart')
+};
 
-// Function to fetch and parse the CSV data
-async function loadData() {
-    try {
-        const response = await fetch('./data/민원_preprocessed.csv');
-        const csvText = await response.text();
+function nf(n){ return (n||0).toLocaleString(); }
+function norm(s){ return String(s||'').replace(/^\uFEFF/, '').trim().toLowerCase().replace(/\s+/g,''); }
 
-        // Simple manual CSV parsing (assuming no complex characters or delimiters)
-        const lines = csvText.split('\n');
-        const headers = lines[0].split(',');
-        const data = [];
+function detectDelimiter(firstLine) {
+  const candidates = [',',';','\t','|'];
+  const counts = candidates.map(d => ({ d, c: (firstLine.match(new RegExp(`\\${d}`,'g'))||[]).length }));
+  counts.sort((a,b)=>b.c-a.c);
+  return counts[0].c ? counts[0].d : ','; // 기본 콤마
+}
 
-        for (let i = 1; i < lines.length; i++) {
-            if (lines[i].trim() === '') continue; // Skip empty lines
-            const values = lines[i].split(',');
-            const item = {};
-            for (let j = 0; j < headers.length; j++) {
-                item[headers[j].trim()] = values[j].trim();
-            }
-            data.push(item);
-        }
+function splitCSVLine(line, delim) {
+  // 따옴표 안의 구분자는 무시
+  const re = new RegExp(`${delim}(?=(?:(?:[^"]*"){2})*[^"]*$)`);
+  return line.split(re).map(s => s.replace(/^"|"$/g,'').trim());
+}
 
-        allData = data;
-        console.log("Data loaded successfully:", allData.length, "rows");
-
-        // Initial display of data with default filters
-        displayData();
-
-    } catch (error) {
-        console.error("Error loading data:", error);
+function buildHeaderMap(headers){
+  const alias = {
+    age:    ['연령','연령대','나이','age'],
+    gender: ['성별','gender','sex'],
+    category:['분야','카테고리','유형','category','type'],
+    count:  ['건수','수','빈도','건','count','cnt','frequency']
+  };
+  const map = {};
+  headers.forEach(h=>{
+    const n = norm(h);
+    for (const key of Object.keys(alias)){
+      if (!map[key] && alias[key].some(a=>norm(a)===n)) { map[key]=h; break; }
     }
+  });
+  return map;
 }
 
-// Function to filter data based on selected criteria
-function filterData(data, age, gender) {
-    return data.filter(item => {
-        const ageValue = item['연령'] ? item['연령'].trim() : ''; // Handle potential undefined/null
-        const genderValue = item['성별'] ? item['성별'].trim() : ''; // Handle potential undefined/null
+async function loadCSV() {
+  const res = await fetch(`${CSV_PATH}?t=${Date.now()}`); // 캐시 무력화
+  if (!res.ok) throw new Error('CSV 로드 실패: ' + res.status);
+  const text = (await res.text()).replace(/\r/g,'').trim();
+  if (!text) throw new Error('빈 파일입니다.');
 
-        const ageMatch = (age === '전체' || ageValue === age);
-        const genderMatch = (gender === '전체' || genderValue === gender);
+  const lines = text.split('\n').filter(Boolean);
+  const delim = detectDelimiter(lines[0]);
+  const rawHeaders = splitCSVLine(lines[0], delim).map(h => h.replace(/^\uFEFF/,'').trim());
+  const H = buildHeaderMap(rawHeaders);
 
-        return ageMatch && genderMatch;
+  // 필수 컬럼 확인(없어도 최대한 추론했지만, 최종 4개가 다 있어야 정상 집계)
+  const need = ['age','gender','category','count'];
+  const missing = need.filter(k => !H[k]);
+  if (missing.length) {
+    console.error('헤더 자동매핑 실패:', {rawHeaders, H, missing});
+    throw new Error(`CSV 헤더를 확인하세요. 필요한 열: 연령/성별/분야/건수`);
+  }
+
+  const rows = lines.slice(1).map(line=>{
+    const cells = splitCSVLine(line, delim);
+    const obj = {};
+    rawHeaders.forEach((h,i)=> obj[h] = cells[i] ?? '');
+    return {
+      age: obj[H.age],
+      gender: obj[H.gender],
+      category: obj[H.category],
+      count: Number(String(obj[H.count]).replace(/[^0-9.-]/g,'')) || 0
+    };
+  });
+
+  return rows;
+}
+
+let RAW = [];
+let chart;
+
+function getFiltered() {
+  const ageSel = (els.age?.value || '전체').trim();
+  const genderSel = (els.gender?.value || '전체').trim();
+  return RAW.filter(r=>{
+    const ageOk = ageSel === '전체' || norm(r.age).includes(norm(ageSel)); // '20' vs '20대'도 매칭
+    const genderOk = genderSel === '전체' || norm(r.gender) === norm(genderSel);
+    return ageOk && genderOk;
+  });
+}
+
+function render() {
+  const data = getFiltered();
+
+  // KPI
+  const total = data.reduce((s,d)=>s+d.count,0);
+  if (els.kpiTitle) els.kpiTitle.textContent = '전체 민원';
+  if (els.kpiValue) els.kpiValue.textContent = `${nf(total)} 건`;
+
+  // 분야 합계
+  const byCat = {};
+  for (const d of data) {
+    const key = d.category || '(미정의)';
+    byCat[key] = (byCat[key]||0) + (d.count||0);
+  }
+  const labels = Object.keys(byCat).filter(k=>k && k!=='undefined');
+  const values = labels.map(k=>byCat[k]);
+
+  const ctx = els.chart?.getContext('2d');
+  if (!ctx) return;
+
+  if (!labels.length) {
+    // 데이터 없음 시 차트 초기화 & 안내
+    if (chart) { chart.destroy(); chart = null; }
+    console.warn('표시할 데이터가 없습니다. 필터/헤더/값을 확인하세요.');
+    return;
+  }
+
+  if (chart) {
+    chart.data.labels = labels;
+    chart.data.datasets[0].data = values;
+    chart.update();
+  } else {
+    chart = new Chart(ctx, {
+      type: 'bar',
+      data: { labels, datasets: [{ label: '분야별 민원 건수', data: values }] },
+      options: {
+        responsive: true,
+        scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+        plugins: { legend: { display:false }, title:{ display:true, text:'분야별 민원 건수' } }
+      }
     });
+  }
 }
 
-
-// Function to get selected filter values and trigger display
-function displayData() {
-    const ageFilter = document.getElementById('age-filter').value;
-    const genderFilter = document.getElementById('gender-filter').value;
-
-    const filtered = filterData(allData, ageFilter, genderFilter);
-    console.log("Filtered data:", filtered.length, "rows");
-
-    renderDashboard(filtered);
+async function init(){
+  try {
+    RAW = await loadCSV();
+    render();
+    els.age?.addEventListener('change', render);
+    els.gender?.addEventListener('change', render);
+  } catch (e) {
+    console.error(e);
+    if (els.kpiTitle) els.kpiTitle.textContent = '데이터 오류';
+    if (els.kpiValue) els.kpiValue.textContent = '-';
+  }
 }
 
-// Function for rendering the dashboard (cards and chart)
-function renderDashboard(data) {
-    renderCards(data);
-    renderChart(data);
-}
-
-// Function to render the category cards
-function renderCards(data) {
-    const cardContainer = document.getElementById('card-container');
-    cardContainer.innerHTML = ''; // Clear previous cards
-
-    // Aggregate data by category
-    const categoryCounts = {};
-    let maxCount = 0;
-    data.forEach(item => {
-        const category = item['분야'];
-        const count = parseInt(item['건수'], 10) || 0;
-        categoryCounts[category] = (categoryCounts[category] || 0) + count;
-        if (categoryCounts[category] > maxCount) {
-            maxCount = categoryCounts[category];
-        }
-    });
-
-    // Sort categories by count descending
-    const sortedCategories = Object.entries(categoryCounts).sort(([, a], [, b]) => b - a);
-
-    sortedCategories.forEach(([category, count]) => {
-        const card = document.createElement('div');
-        card.classList.add('card');
-
-        // Add visual emphasis based on count size
-        if (maxCount > 0) {
-            const percentage = (count / maxCount) * 100;
-            if (percentage > 80) {
-                card.style.backgroundColor = '#ffcccc'; // Reddish for high counts
-            } else if (percentage > 50) {
-                 card.style.backgroundColor = '#ffffcc'; // Yellowish for medium counts
-            } else {
-                 card.style.backgroundColor = '#ccffcc'; // Greenish for lower counts
-            }
-        }
-
-
-        card.innerHTML = `<h3>${category}</h3><p>${count.toLocaleString()} 건</p>`;
-        cardContainer.appendChild(card);
-    });
-}
-
-// Function for rendering the chart
-function renderChart(data) {
-     // Aggregate data by category for chart display
-     const categoryCounts = {};
-     data.forEach(item => {
-         const category = item['분야'];
-         const count = parseInt(item['건수'], 10) || 0;
-         categoryCounts[category] = (categoryCounts[category] || 0) + count;
-     });
-
-     const categories = Object.keys(categoryCounts);
-     const counts = Object.values(categoryCounts);
-
-     const ctx = document.getElementById('categoryChart').getContext('2d');
-
-     // Destroy existing chart if it exists
-     if (window.categoryChartInstance) {
-         window.categoryChartInstance.destroy();
-     }
-
-     window.categoryChartInstance = new Chart(ctx, {
-         type: 'bar', // Or 'pie', 'doughnut', etc.
-         data: {
-             labels: categories,
-             datasets: [{
-                 label: '민원 건수',
-                 data: counts,
-                 backgroundColor: 'rgba(75, 192, 192, 0.6)',
-                 borderColor: 'rgba(75, 192, 192, 1)',
-                 borderWidth: 1
-             }]
-         },
-         options: {
-             responsive: true,
-             scales: {
-                 y: {
-                     beginAtZero: true
-                 }
-             },
-             plugins: {
-                 title: {
-                     display: true,
-                     text: '분야별 민원 건수'
-                 },
-                  legend: {
-                    display: false // Hide legend for single dataset
-                 }
-             }
-         }
-     });
-}
-
-
-// Add event listeners to filters
-document.getElementById('age-filter').addEventListener('change', displayData);
-document.getElementById('gender-filter').addEventListener('change', displayData);
-
-// Load data when the page loads
-loadData();
+document.addEventListener('DOMContentLoaded', init);
