@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>민원 현황 대시보드</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <h1>지역별 민원 현황 대시보드</h1>
+
+    <div class="filters">
+        <label for="age-filter">연령대:</label>
+        <select id="age-filter">
+            <option value="전체">전체</option>
+            <option value="10">10대</option>
+            <option value="20">20대</option>
+            <option value="30">30대</option>
+            <option value="40">40대</option>
+            <option value="50">50대</option>
+            <option value="60">60대</option>
+            <option value="70">70대</option>
+            <option value="80">80대</option>
+            <option value="90">90대</option>
+        </select>
+
+        <label for="gender-filter">성별:</label>
+        <select id="gender-filter">
+            <option value="전체">전체</option>
+            <option value="남성">남성</option>
+            <option value="여성">여성</option>
+        </select>
+    </div>
+
+    <div id="card-container">
+        <!-- Category cards will be loaded here by JavaScript -->
+    </div>
+
+    <div class="chart-container">
+        <canvas id="categoryChart"></canvas>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
