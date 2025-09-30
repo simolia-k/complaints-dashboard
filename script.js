@@ -5,7 +5,7 @@ let categoryChartInstance = null; // Variable to hold the Chart.js instance
 // Function to fetch and parse the CSV data
 async function loadData() {
     try {
-        const response = await fetch('/content/민원_preprocessed.csv');
+        const response = await fetch('/data/민원_preprocessed.csv');
         const csvText = await response.text();
 
         // Simple manual CSV parsing (assuming no complex characters or delimiters)
